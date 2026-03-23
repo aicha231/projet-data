@@ -1,0 +1,213 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score,
+    f1_score, confusion_matrix, classification_report
+)
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+
+# =============================
+# CONFIG
+# =============================
+st.set_page_config("Évaluation ML", "🏠", layout="wide")
+st.title("🏠 Évaluation et Prédiction des Prix Immobiliers")
+
+# =============================
+# MENU
+# =============================
+menu = st.radio(
+    "Menu",
+    ["Aperçu", "Analyser", "Modèles", "Évaluation des indicateurs", "Prédiction du prix"],
+    horizontal=True
+)
+
+# =============================
+# DATA
+# =============================
+@st.cache_data
+def load_data():
+    df = pd.read_csv("house-prices.csv")
+    df["Brick"] = df["Brick"].map({"Yes": 1, "No": 0})
+    df["Total_Rooms"] = df["Bedrooms"] + df["Bathrooms"]
+    df["SqFt_per_Room"] = df["SqFt"] / df["Total_Rooms"]
+    df["Price_Class"] = (df["Price"] > df["Price"].median()).astype(int)
+    return df
+
+df = load_data()
+
+features = ["SqFt", "Bedrooms", "Bathrooms", "Offers", "Brick", "Total_Rooms", "SqFt_per_Room"]
+
+# =============================
+# CLASSIFICATION DATA
+# =============================
+X = df[features]
+y_class = df["Price_Class"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y_class, test_size=0.2, random_state=42, stratify=y_class
+)
+
+# =============================
+# CLASSIFICATION MODELS
+# =============================
+class_models = {
+    "KNN": Pipeline([
+        ("scaler", StandardScaler()),
+        ("model", KNeighborsClassifier(n_neighbors=9))
+    ]),
+    "Logistic Regression": Pipeline([
+        ("scaler", StandardScaler()),
+        ("model", LogisticRegression())
+    ]),
+    "Random Forest": RandomForestClassifier(
+        n_estimators=300,
+        max_depth=10,
+        random_state=42
+    )
+}
+
+results = {}
+conf_matrices = {}
+reports = {}
+
+for name, model in class_models.items():
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    results[name] = {
+        "Accuracy": accuracy_score(y_test, y_pred),
+        "Precision": precision_score(y_test, y_pred),
+        "Recall": recall_score(y_test, y_pred),
+        "F1-score": f1_score(y_test, y_pred)
+    }
+
+    conf_matrices[name] = confusion_matrix(y_test, y_pred)
+    reports[name] = classification_report(y_test, y_pred, output_dict=True)
+
+results_df = pd.DataFrame(results).T
+
+# =============================
+# REGRESSION MODEL (PRIX EXACT)
+# =============================
+X_reg = df[features]
+y_reg = df["Price"]
+
+Xr_train, Xr_test, yr_train, yr_test = train_test_split(
+    X_reg, y_reg, test_size=0.2, random_state=42
+)
+
+price_model = RandomForestRegressor(
+    n_estimators=500,
+    max_depth=12,
+    random_state=42
+)
+price_model.fit(Xr_train, yr_train)
+
+# =============================
+# PAGES
+# =============================
+if menu == "Aperçu":
+    st.subheader("Aperçu des données")
+    st.dataframe(df.head())
+    st.subheader("Statistiques descriptives")
+    st.dataframe(df.describe())
+
+# =============================
+# ANALYSER
+# =============================
+elif menu == "Analyser":
+    st.subheader("Analyse exploratoire")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig, ax = plt.subplots()
+        sns.histplot(df["Price"], kde=True, ax=ax)
+        st.pyplot(fig)
+
+    with col2:
+        fig, ax = plt.subplots()
+        sns.scatterplot(x=df["SqFt"], y=df["Price"], hue=df["Price_Class"], ax=ax)
+        st.pyplot(fig)
+
+    st.markdown("### Matrice de corrélation")
+    fig, ax = plt.subplots(figsize=(8,6))
+    sns.heatmap(df.select_dtypes(include=np.number).corr(), annot=True, cmap="coolwarm", ax=ax)
+    st.pyplot(fig)
+
+# =============================
+# MODELES
+# =============================
+elif menu == "Modèles":
+    st.subheader("Comparaison des performances (Classification)")
+    fig, ax = plt.subplots(figsize=(9,5))
+    results_df.plot(kind="bar", ax=ax)
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("Score")
+    plt.xticks(rotation=0)
+    st.pyplot(fig)
+
+# =============================
+# ÉVALUATION
+# =============================
+elif menu == "Évaluation des indicateurs":
+    model_choice = st.selectbox("Choisir un modèle", results_df.index)
+
+    st.subheader("Scores")
+    st.table(results_df.loc[[model_choice]])
+
+    st.subheader("Rapport de classification")
+    st.dataframe(pd.DataFrame(reports[model_choice]).transpose())
+
+    st.subheader("Matrice de confusion")
+    fig, ax = plt.subplots()
+    sns.heatmap(conf_matrices[model_choice], annot=True, fmt="d", cmap="Blues", ax=ax)
+    st.pyplot(fig)
+
+# =============================
+# 🔮 PRÉDICTION DU PRIX EXACT
+# =============================
+elif menu == "Prédiction du prix":
+    st.subheader("🔮 Prédire le prix exact d'une maison")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        sqft = st.slider("Surface (SqFt)", 500, 5000, 1500)
+        bedrooms = st.slider("Chambres", 1, 10, 3)
+        bathrooms = st.slider("Salles de bain", 1, 5, 2)
+
+    with col2:
+        offers = st.slider("Nombre d'offres", 0, 10, 2)
+        brick = st.selectbox("Maison en brique ?", ["Yes", "No"])
+
+    total_rooms = bedrooms + bathrooms
+    sqft_per_room = sqft / total_rooms
+
+    input_data = pd.DataFrame([{
+        "SqFt": sqft,
+        "Bedrooms": bedrooms,
+        "Bathrooms": bathrooms,
+        "Offers": offers,
+        "Brick": 1 if brick == "Yes" else 0,
+        "Total_Rooms": total_rooms,
+        "SqFt_per_Room": sqft_per_room
+    }])
+
+    if st.button("💰 Prédire le prix"):
+        predicted_price = price_model.predict(input_data)[0]
+
+        st.success("✅ Prédiction terminée")
+        st.metric(
+            label="🏠 Prix estimé de la maison",
+            value=f"{predicted_price:,.0f} $"
+        )
